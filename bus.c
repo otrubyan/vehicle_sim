@@ -96,27 +96,19 @@ int runPedestrianSafetySystem(Bus* bus, double timeResolution)
     switch(bus->status.pedSafetySystemState)
     {
         case CROSS_VIGILANT:{
-                            
-            /*for(int i=0; i!=bus->route.crosswalkCount; i++)
+            for(int i = 0; i != bus->route.crosswalkCount; i++)
             {
+                double distanceToCrossing = bus->route.crosswalks[i].distanceFromStart - bus->status.distanceTravelled;
+            
+                if(distanceToCrossing < 0)
+                    continue;
+               
+                double timeToStop = bus->status.currentSpeed / bus->constraints.deceleration;
+                double distanceToStop = bus->status.currentSpeed * timeToStop - bus->constraints.deceleration * timeToStop*timeToStop;
 
-                // a*t^2
-                S = bus->status.currentSpeed * time - bus->constraints.deceleration * time^2
-
-                bus->status.currentSpeed;
-                if(bus->route.crosswalks[i].distanceFromStart - bus->status.distanceTravelled > 0);
-                //pedCount;    
+                if(distanceToCrossing == distanceToStop)
+                    bus->status.pedSafetySystemState = STOP_CROSS_AHEAD;    
             }
-            
-            coordinate
-        
-            if(bus->status.currentSpeed)
-            */
-            //bus->status.driveSystemState = ACCELERATING;
-            
-            // if condition is just right - stop the bus            
-            bus->status.pedSafetySystemState = STOP_CROSS_AHEAD;
-
             
             logMsg("Bus is in CROSSING VIGILANT mode.");
             break;
@@ -132,6 +124,7 @@ int runPedestrianSafetySystem(Bus* bus, double timeResolution)
             break;
         }
         case WAIT_FOR_PEDS:{
+            //pedCount;
             //if(bus->route.crosswalk[i].pedCount > 0)
             //else{bus->status.pedSafetySystemState = CROSS_VIGILANT}
             //bus->status.driveSystemState = STOPPING;
