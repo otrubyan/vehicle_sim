@@ -96,6 +96,8 @@ int runPedestrianSafetySystem(Bus* bus, double timeResolution)
     switch(bus->status.pedSafetySystemState)
     {
         case CROSS_VIGILANT:{
+            logMsg("Bus is in CROSSING VIGILANT mode.");
+            
             for(int i = 0; i != bus->route.crosswalkCount; i++)
             {
                 double distanceToCrossing = bus->route.crosswalks[i].distanceFromStart - bus->status.distanceTravelled;
@@ -104,14 +106,11 @@ int runPedestrianSafetySystem(Bus* bus, double timeResolution)
                     continue;
                
                 double timeToStop = bus->status.currentSpeed / bus->constraints.deceleration;
-                double distanceToStop = bus->status.currentSpeed * timeToStop - bus->constraints.deceleration * timeToStop*timeToStop;
+                double distanceToStop = bus->status.currentSpeed * timeToStop - bus->constraints.deceleration * timeToStop*timeToStop / 2.0;
 
                 if(distanceToCrossing == distanceToStop)
                     bus->status.pedSafetySystemState = STOP_CROSS_AHEAD;    
             }
-            
-            logMsg("Bus is in CROSSING VIGILANT mode.");
-            break;
         }
         case STOP_CROSS_AHEAD:{
             logMsg("Bus is STOPPING BEFORE THE CROSSING.");
@@ -123,13 +122,28 @@ int runPedestrianSafetySystem(Bus* bus, double timeResolution)
 
             break;
         }
-        case WAIT_FOR_PEDS:{
-            //pedCount;
-            //if(bus->route.crosswalk[i].pedCount > 0)
-            //else{bus->status.pedSafetySystemState = CROSS_VIGILANT}
-            //bus->status.driveSystemState = STOPPING;
+        case WAIT_FOR_PEDS:{        
+            Crosswalk* currentCrosswalk;
+            
+            for(int i = 0; i != bus->route.crosswalkCount; i++)
+            {
+                double distanceToCrossing = bus->route.crosswalks[i].distanceFromStart - bus->status.distanceTravelled;
+            
+                if(distanceToCrossing == 0)
+                {
+                    currentCrosswalk = &bus->route.crosswalks[i];
+                    break;
+                }
+            }
+            
+            if(currentCrosswalk->pedCount > 0)
+            {
+                currentCrosswalk->pedCount--;
+            }            
+            else
+                bus->status.pedSafetySystemState = CROSS_VIGILANT;
+
             logMsg("Bus is WAITING FOR PEDS to cross.");
-            // honk
             break;
         }    
         default:{
@@ -158,12 +172,15 @@ int runDriveSystem(Bus* bus, double timeResolution)
             
             double speedDelta = bus->constraints.deceleration * timeResolution;
             bus->status.currentSpeed -= speedDelta;
-            
-            distanceDelta = bus->status.currentSpeed * timeResolution - speedDelta * timeResolution;
-            
+
             if(bus->status.currentSpeed <= 0)
+            {
+                speedDelta = 0;
                 bus->status.currentSpeed = 0;
-        
+            }
+            
+            distanceDelta = bus->status.currentSpeed * timeResolution - speedDelta * timeResolution / 2.0;
+            
             printf("energyRestored: %f speedDelta: %f distanceDelta: %f\n", energyRestored, speedDelta, distanceDelta);
         
             break;
@@ -197,7 +214,7 @@ int runDriveSystem(Bus* bus, double timeResolution)
             double speedDelta = bus->constraints.acceleration * timeResolution;
             bus->status.currentSpeed = bus->status.currentSpeed + speedDelta;
 
-            distanceDelta = bus->status.currentSpeed * timeResolution + speedDelta * timeResolution;
+            distanceDelta = bus->status.currentSpeed * timeResolution + speedDelta * timeResolution / 2.0;
 
             // speed limiting logic
             if(bus->status.currentSpeed < bus->route.speedLimit)
