@@ -19,6 +19,9 @@
 #define CROSS_VIGILANT 0
 #define STOP_CROSS_AHEAD 1
 #define WAIT_FOR_PEDS 2
+#define END_OF_ROUTE_VIGILANT 3
+#define STOP_END_AHEAD 4
+#define END_OF_ROUTE 5
 
 #define STOPPING 0
 #define COASTING 1
@@ -98,54 +101,110 @@ int runPedestrianSafetySystem(Bus* bus, double timeResolution)
         case CROSS_VIGILANT:{
             logMsg("Bus is in CROSSING VIGILANT mode.");
             
+            bus->status.driveSystemState = ACCELERATING;
+            
+            int crosswalksLeftCount = bus->route.crosswalkCount;
             for(int i = 0; i != bus->route.crosswalkCount; i++)
             {
                 double distanceToCrossing = bus->route.crosswalks[i].distanceFromStart - bus->status.distanceTravelled;
             
                 if(distanceToCrossing < 0)
+                {
+                    crosswalksLeftCount--;
                     continue;
-               
+                }
+                
                 double timeToStop = bus->status.currentSpeed / bus->constraints.deceleration;
                 double distanceToStop = bus->status.currentSpeed * timeToStop - bus->constraints.deceleration * timeToStop*timeToStop / 2.0;
 
-                if(distanceToCrossing == distanceToStop)
-                    bus->status.pedSafetySystemState = STOP_CROSS_AHEAD;    
+                double dSVConst = bus->status.currentSpeed * timeResolution;
+                double dSAConst = bus->constraints.acceleration * timeResolution*timeResolution / 2.0;
+                double dS = (bus->status.driveSystemState == ACCELERATING) ? dSVConst + dSAConst : dSVConst;
+
+                bool isBusIsBeforeCrossing = distanceToCrossing - distanceToStop > 0;
+                bool isNoMoreRoomToWait = distanceToCrossing - (distanceToStop + dS) < 0;
+
+                printf("i: %d, distToCross: %f, timeToStop:%f, distToStop:%f\n", i, distanceToCrossing, timeToStop, distanceToStop);            
+
+                if(isBusIsBeforeCrossing && isNoMoreRoomToWait)
+                    bus->status.pedSafetySystemState = STOP_CROSS_AHEAD;
             }
+            
+            if(crosswalksLeftCount == 0)
+                bus->status.pedSafetySystemState = END_OF_ROUTE_VIGILANT;
+            
+            break;
         }
         case STOP_CROSS_AHEAD:{
             logMsg("Bus is STOPPING BEFORE THE CROSSING.");
+            bus->status.driveSystemState = STOPPING;            
             
-            bus->status.driveSystemState = STOPPING;
-            
-            if(bus->status.currentSpeed = 0)
+            if(bus->status.currentSpeed == 0)
                 bus->status.pedSafetySystemState = WAIT_FOR_PEDS;
-
+         
             break;
         }
-        case WAIT_FOR_PEDS:{        
-            Crosswalk* currentCrosswalk;
-            
+        case WAIT_FOR_PEDS:{
+            logMsg("Bus is WAITING FOR PEDS to cross.");
+
+            int crosswalkIndex = 0;
             for(int i = 0; i != bus->route.crosswalkCount; i++)
             {
                 double distanceToCrossing = bus->route.crosswalks[i].distanceFromStart - bus->status.distanceTravelled;
             
-                if(distanceToCrossing == 0)
+                if(distanceToCrossing > 0)
                 {
-                    currentCrosswalk = &bus->route.crosswalks[i];
+                    crosswalkIndex = i;
                     break;
-                }
+                }            
             }
             
+            Crosswalk* currentCrosswalk = &bus->route.crosswalks[crosswalkIndex];
+            
             if(currentCrosswalk->pedCount > 0)
-            {
                 currentCrosswalk->pedCount--;
-            }            
             else
                 bus->status.pedSafetySystemState = CROSS_VIGILANT;
 
-            logMsg("Bus is WAITING FOR PEDS to cross.");
+            printf("%d\n", currentCrosswalk->pedCount);
             break;
-        }    
+        }
+        case END_OF_ROUTE_VIGILANT:{
+            logMsg("Bus is LOOKING FOR END OF ROUTE.");
+
+            double whatIsLeft = bus->status.distanceTravelled - bus->route.length;
+
+            double timeToStop = bus->status.currentSpeed / bus->constraints.deceleration;
+            double distanceToStop = bus->status.currentSpeed * timeToStop - bus->constraints.deceleration * timeToStop*timeToStop / 2.0;
+
+            double dSVConst = bus->status.currentSpeed * timeResolution;
+            double dSAConst = bus->constraints.acceleration * timeResolution*timeResolution / 2.0;
+            double dS = (bus->status.driveSystemState == ACCELERATING) ? dSVConst + dSAConst : dSVConst;
+
+            bool isBusIsBeforeEnd = whatIsLeft - distanceToStop > 0;
+            bool isNoMoreRoomToWait = whatIsLeft - (distanceToStop + dS) < 0;
+
+            if(isBusIsBeforeEnd && isNoMoreRoomToWait)
+                bus->status.pedSafetySystemState = STOP_END_AHEAD;
+       
+            break;
+        }
+        case STOP_END_AHEAD:
+        {
+            logMsg("Bus is STOPPING BEFORE THE END OF ROUTE.");
+            bus->status.driveSystemState = STOPPING;     
+            
+            if(bus->status.currentSpeed == 0)
+                bus->status.pedSafetySystemState = END_OF_ROUTE;
+         
+            break;
+
+        }
+        case END_OF_ROUTE:
+        {
+            logMsg("Bus is FINISHED TRIP.");        
+            break;
+        }
         default:{
             logMsg("No such state, abort program."); 
             return true;
@@ -278,10 +337,10 @@ int runBusSimulation(RoutePlanner route)
         usleep(100000);
         
         // pedestrian safety system
-        isInterrupted = runPedestrianSafetySystem(&bus, timeResolution);
+        isInterrupted |= runPedestrianSafetySystem(&bus, timeResolution);
         
         // drive system
-        isInterrupted = runDriveSystem(&bus, timeResolution);
+        isInterrupted |= runDriveSystem(&bus, timeResolution);
         
         // propagate bus     
         bus.status.tripTime = simCnt*timeResolution;
@@ -298,7 +357,11 @@ int runBusSimulation(RoutePlanner route)
 
 uint32_t peds()
 {
-    return rand()%MAX_CROSSWALK_PEDS;
+    uint32_t randomValue = rand()%MAX_CROSSWALK_PEDS;
+    
+    printf("%d\n", randomValue);
+    
+    return randomValue;
 }
 
 int main()
