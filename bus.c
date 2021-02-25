@@ -16,18 +16,20 @@
 #define RECUPERATION_RATE 1
 
 // define state machine's states
-#define CROSS_VIGILANT 0
-#define STOP_CROSS_AHEAD 1
-#define WAIT_FOR_PEDS 2
-#define END_OF_ROUTE_VIGILANT 3
-#define STOP_END_AHEAD 4
-#define END_OF_ROUTE 5
+#define START_OF_ROUTE 0
+#define CROSS_VIGILANT 1
+#define STOP_CROSS_AHEAD 2
+#define WAIT_FOR_PEDS 3
+#define ROUTE_END_VIGILANT 4
+#define STOP_END_AHEAD 5
+#define END_OF_ROUTE 6
 
 #define STOPPING 0
 #define COASTING 1
 #define ACCELERATING 2
+#define SPEED_LIMITING 3
 
-#define fromKmToM(V) (V*1000/3600)
+#define fromKmToM(V) (V*1000.0/3600.0)
 
 // speed constants
 #define CAPTAINSLOW fromKmToM(40)
@@ -98,11 +100,20 @@ int runPedestrianSafetySystem(Bus* bus, double timeResolution)
 {
     switch(bus->status.pedSafetySystemState)
     {
-        case CROSS_VIGILANT:{
-            logMsg("Bus is in CROSSING VIGILANT mode.");
-            
+        case START_OF_ROUTE:
+        {           
+            if(bus->route.length > 0)
+                bus->status.pedSafetySystemState = CROSS_VIGILANT;
+            else
+                return true;
+       
             bus->status.driveSystemState = ACCELERATING;
             
+            break;
+        }
+        case CROSS_VIGILANT:{
+            logMsg("Bus is in CROSS VIGILANT mode.");
+                        
             int crosswalksLeftCount = bus->route.crosswalkCount;
             for(int i = 0; i != bus->route.crosswalkCount; i++)
             {
@@ -131,7 +142,10 @@ int runPedestrianSafetySystem(Bus* bus, double timeResolution)
             }
             
             if(crosswalksLeftCount == 0)
-                bus->status.pedSafetySystemState = END_OF_ROUTE_VIGILANT;
+            {
+                bus->status.driveSystemState = ACCELERATING;
+                bus->status.pedSafetySystemState = ROUTE_END_VIGILANT;
+            }
             
             break;
         }
@@ -164,12 +178,14 @@ int runPedestrianSafetySystem(Bus* bus, double timeResolution)
             if(currentCrosswalk->pedCount > 0)
                 currentCrosswalk->pedCount--;
             else
+            {
+                bus->status.driveSystemState = ACCELERATING;
                 bus->status.pedSafetySystemState = CROSS_VIGILANT;
-
+            }
             printf("%d\n", currentCrosswalk->pedCount);
             break;
         }
-        case END_OF_ROUTE_VIGILANT:{
+        case ROUTE_END_VIGILANT:{
             logMsg("Bus is LOOKING FOR END OF ROUTE.");
 
             double whatIsLeft = bus->status.distanceTravelled - bus->route.length;
@@ -198,7 +214,6 @@ int runPedestrianSafetySystem(Bus* bus, double timeResolution)
                 bus->status.pedSafetySystemState = END_OF_ROUTE;
          
             break;
-
         }
         case END_OF_ROUTE:
         {
@@ -261,6 +276,14 @@ int runDriveSystem(Bus* bus, double timeResolution)
         case ACCELERATING:{
             logMsg("Bus is ACCELERATING");
 
+            // speed limiting logic
+            if(bus->status.currentSpeed > bus->route.speedLimit)
+            {
+                bus->status.driveSystemState = SPEED_LIMITING;
+                break;
+            }else if(bus->status.currentSpeed == bus->route.speedLimit)
+                bus->status.driveSystemState = COASTING;
+            
             if(bus->status.currentEnergy == 0)
             {
                 bus->status.driveSystemState = COASTING;
@@ -273,19 +296,17 @@ int runDriveSystem(Bus* bus, double timeResolution)
             double speedDelta = bus->constraints.acceleration * timeResolution;
             bus->status.currentSpeed = bus->status.currentSpeed + speedDelta;
 
-            distanceDelta = bus->status.currentSpeed * timeResolution + speedDelta * timeResolution / 2.0;
-
-            // speed limiting logic
-            if(bus->status.currentSpeed < bus->route.speedLimit)
-                bus->status.driveSystemState = ACCELERATING;
-            else if(bus->status.currentSpeed > bus->route.speedLimit)
-                bus->status.driveSystemState = STOPPING;
-            else
-                bus->status.driveSystemState = COASTING;              
+            distanceDelta = bus->status.currentSpeed * timeResolution + speedDelta * timeResolution / 2.0; 
 
             printf("energyBurned: %f speedDelta: %f distanceDelta: %f\n", energyBurned, speedDelta, distanceDelta);
           
             break;
+        }
+        case SPEED_LIMITING:
+        {
+            // decelerating for sanity sake
+            bus->status.driveSystemState = STOPPING;    
+            break;    
         }
         default:{
             logMsg("No such state, abort program."); 
@@ -320,8 +341,8 @@ int runBusSimulation(RoutePlanner route)
     bus.constraints = constraints;
     
     StatusRegister initStatus;
-    initStatus.driveSystemState = ACCELERATING;
-    initStatus.pedSafetySystemState = CROSS_VIGILANT;
+    initStatus.driveSystemState = STOPPING;
+    initStatus.pedSafetySystemState = START_OF_ROUTE;
     initStatus.currentSpeed = 0;
     initStatus.distanceTravelled = 0;
     initStatus.currentEnergy = bus.constraints.energyCapacity;
@@ -331,7 +352,8 @@ int runBusSimulation(RoutePlanner route)
     bus.route = route;
       
     // run the machine
-    for(uint32_t simCnt = 0; !isFinished && !isInterrupted; simCnt++)
+    uint32_t simCnt = 0;
+    while(!isFinished && !isInterrupted && bus.status.pedSafetySystemState != END_OF_ROUTE)
     {
         // wait timer for human readable experience
         usleep(100000);
@@ -344,23 +366,17 @@ int runBusSimulation(RoutePlanner route)
         
         // propagate bus     
         bus.status.tripTime = simCnt*timeResolution;
- 
-        // check if trip is over        
-        if(bus.status.distanceTravelled >= route.length)
-            isFinished = true;
-    
-        printf("spd lmt: %f, spd %f, nrg %d, dist %f, time %f\n", bus.route.speedLimit, bus.status.currentSpeed, bus.status.currentEnergy, bus.status.distanceTravelled, bus.status.tripTime);
-    }
 
-    logMsg("Finished.");
+        printf("spd lmt: %f, spd %f ", bus.route.speedLimit, bus.status.currentSpeed);
+        printf("nrg %d, dist %f, time %f\n", bus.status.currentEnergy, bus.status.distanceTravelled, bus.status.tripTime);
+
+        simCnt++;    
+    }
 }
 
 uint32_t peds()
 {
-    uint32_t randomValue = rand()%MAX_CROSSWALK_PEDS;
-    
-    printf("%d\n", randomValue);
-    
+    uint32_t randomValue = rand()%MAX_CROSSWALK_PEDS;    
     return randomValue;
 }
 
@@ -370,16 +386,16 @@ int main()
 
     // prepare test routes
     RoutePlanner easy = {"Hey, not too rough", CAPTAINSLOW, routeLength, {350.0, peds()}, 1};
-    //RoutePlanner medium = {"Hurt me plenty", NORMAL, routeLength, {{350, peds()}, {700, peds()}}, 2};
-    //RoutePlanner hard = {"Ultra-Violence", FAST, routeLength, {{200, peds()}, {400, peds()}, {600, peds()}, {800, peds()}}, 4};
-    //RoutePlanner itsgonnahurt = {"Nightmare!", BULLITT, routeLength, {{100, peds()}, {200, peds()}, {300, peds()}, {400, peds()}, {500, peds()}, {600, peds()}, {700, peds()}, {800, peds()}, {900, peds()}}, 9};
+    RoutePlanner medium = {"Hurt me plenty", NORMAL, routeLength, {{350, peds()}, {700, peds()}}, 2};
+    RoutePlanner hard = {"Ultra-Violence", FAST, routeLength, {{200, peds()}, {400, peds()}, {600, peds()}, {800, peds()}}, 4};
+    RoutePlanner itsgonnahurt = {"Nightmare!", BULLITT, routeLength, {{100, peds()}, {200, peds()}, {300, peds()}, {400, peds()}, {500, peds()}, {600, peds()}, {700, peds()}, {800, peds()}, {900, peds()}}, 9};
 
     // special test routes
     //RoutePlanner easyrider = {"Hey, not too rough", MAXDAMAGE, routeLength, {}, 0};
     
     // run simulations
-    runBusSimulation(easy);    
-    //runBusSimulation(medium);
+    //runBusSimulation(easy);    
+    runBusSimulation(medium);
     //runBusSimulation(hard);
     //runBusSimulation(itsgonnahurt);
     //runBusSimulation(easyrider);
